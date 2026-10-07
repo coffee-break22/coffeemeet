@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: coffeemeet-worker
+    runtime: node
+    plan: free
+    rootDir: app/worker
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.13.1
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_CALENDAR_ID
+        value: primary
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: BAILEYS_AUTH_DIR
+        value: /tmp/coffeemeet-baileys
+      - key: POLL_INTERVAL_MS
+        value: "5000"
+      - key: JOB_CONCURRENCY
+        value: "4"
+      - key: LOG_LEVEL
+        value: info
+      - key: SHOW_QR_IN_TERMINAL
+        value: "false"

@@ -1,0 +1,24 @@
+import { supabase } from '../infrastructure/supabase/client.ts'
+export type WeeklyParticipantState='matched'|'unmatched'|'unconfirmed'|'withdrawn'|'blocked'|'holiday'|'cancelled'|'completed'|'disputed'|'no_show'|'pending'
+export interface WeeklyParticipantStatus {userId:string;fullName:string;city:string;state:WeeklyParticipantState;detail:string;meetingId?:string;partnerName?:string;appointment?:string;meetLink?:string|null}
+interface WeeklyMeetingRow {id:string;user_a_id:string;user_b_id:string;status:string;slot_id:string;meet_link:string|null}
+const slotDate=(slot:string)=>{const parts=slot.split('|');return parts[0]==='virtual'?parts[1]:parts[2]}
+export async function loadWeeklyParticipantStatuses(weekCode:string,blockedDates:string[]):Promise<WeeklyParticipantStatus[]>{
+ if(!supabase)return[]
+ const[profiles,admins,availability,participations,meetings,batch,incidents,chances]=await Promise.all([
+  supabase.from('profiles').select('id,full_name,city,verification_status').eq('verification_status','approved'),
+  supabase.from('admin_users').select('user_id'),
+  supabase.from('weekly_availabilities').select('user_id,slot_id').eq('week_code',weekCode).eq('is_active',true),
+  supabase.from('weekly_participations').select('user_id,status').eq('week_code',weekCode),
+  supabase.from('meetings').select('id,user_a_id,user_b_id,status,slot_id,meet_link').eq('week_code',weekCode).neq('status','draft'),
+  supabase.from('match_batches').select('result').eq('week_code',weekCode).order('revision',{ascending:false}).limit(1).maybeSingle(),
+  supabase.from('reputation_incidents').select('id,user_id').eq('status','confirmed'),
+  supabase.from('second_chances').select('incident_id')
+ ])
+ for(const result of[profiles,admins,availability,participations,meetings,batch,incidents,chances])if(result.error)throw result.error
+ const adminIds=new Set((admins.data??[]).map(row=>row.user_id)),blockedSet=new Set(blockedDates),compensated=new Set((chances.data??[]).map(row=>row.incident_id)),blockedUsers=new Set((incidents.data??[]).filter(row=>!compensated.has(row.id)).map(row=>row.user_id))
+ const slots=new Map<string,string[]>();for(const row of availability.data??[])slots.set(row.user_id,[...(slots.get(row.user_id)??[]),row.slot_id])
+ const profileNames=new Map((profiles.data??[]).map(row=>[row.id,row.full_name]));const participation=new Map((participations.data??[]).map(row=>[row.user_id,row.status]));const meetingByUser=new Map<string,WeeklyMeetingRow>();for(const meeting of meetings.data??[]){meetingByUser.set(meeting.user_a_id,meeting);meetingByUser.set(meeting.user_b_id,meeting)}
+ const result=batch.data?.result as {unmatched?:Array<{userId:string;reason:string;detail:string}>}|null;const unmatched=new Map((result?.unmatched??[]).map(item=>[item.userId,item.detail]));const relevant=new Set([...slots.keys(),...participation.keys(),...meetingByUser.keys()])
+ return(profiles.data??[]).filter(profile=>!adminIds.has(profile.id)&&relevant.has(profile.id)).map(profile=>{const status=participation.get(profile.id),userSlots=slots.get(profile.id)??[],meeting=meetingByUser.get(profile.id),base={userId:profile.id,fullName:profile.full_name,city:profile.city??''};if(status==='withdrawn')return{...base,state:'withdrawn' as const,detail:'Se retiró de esta semana.'};if(status!=='confirmed')return{...base,state:'unconfirmed' as const,detail:'No confirmó antes del cierre del lunes.'};if(blockedUsers.has(profile.id))return{...base,state:'blocked' as const,detail:'Excluido por una incidencia activa.'};if(userSlots.length>0&&userSlots.every(slot=>blockedSet.has(slotDate(slot))))return{...base,state:'holiday' as const,detail:'Toda su disponibilidad quedó inhabilitada.'};if(meeting){const parts=meeting.slot_id.split('|'),virtual=parts[0]==='virtual',date=parts[virtual?1:2],time=parts[virtual?2:3],place=virtual?'Virtual':parts[1],partnerId=meeting.user_a_id===profile.id?meeting.user_b_id:meeting.user_a_id,meetingInfo={meetingId:meeting.id,partnerName:profileNames.get(partnerId)??'—',appointment:`${date} · ${time} · ${place}`,meetLink:meeting.meet_link};if(meeting.status==='completed')return{...base,...meetingInfo,state:'completed' as const,detail:'Realizada'};if(meeting.status==='attendance_disputed')return{...base,...meetingInfo,state:'disputed' as const,detail:'Reportes contradictorios'};if(meeting.status==='no_show')return{...base,...meetingInfo,state:'no_show' as const,detail:'No-show confirmado'};if(meeting.status==='cancelled_on_time'||meeting.status==='late_cancellation')return{...base,...meetingInfo,state:'cancelled' as const,detail:meeting.status==='late_cancellation'?'Cancelación tardía':'Cancelada a tiempo'};return{...base,...meetingInfo,state:'matched' as const,detail:'Cita asignada'}}const reason=unmatched.get(profile.id);return{...base,state:reason?'unmatched' as const:'pending' as const,detail:reason??'Pendiente de la corrida de matching.'}}).sort((a,b)=>a.fullName.localeCompare(b.fullName))
+}

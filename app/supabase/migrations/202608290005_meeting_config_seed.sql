@@ -1,0 +1,3 @@
+﻿insert into public.meeting_config(key,value)
+values('current','{"weekCode":"2026-W36","cities":[{"id":"bogota","name":"Bogotá","places":[{"id":"cafe-centro","name":"Café Centro"},{"id":"zona-t","name":"Zona T"}]},{"id":"medellin","name":"Medellín","places":[{"id":"poblado","name":"El Poblado"},{"id":"laureles","name":"Laureles"}]},{"id":"cali","name":"Cali","places":[{"id":"granada","name":"Granada"},{"id":"pance","name":"Pance"}]}],"days":[{"label":"Martes","date":"2026-09-01","enabled":true,"blocked":false,"reason":""},{"label":"Miércoles","date":"2026-09-02","enabled":true,"blocked":false,"reason":""},{"label":"Jueves","date":"2026-09-03","enabled":true,"blocked":false,"reason":""}],"times":["08:00","12:30","18:00"]}')
+on conflict(key) do nothing;
