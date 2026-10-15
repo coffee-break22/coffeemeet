@@ -32,6 +32,7 @@ const labels: Record<string, string> = {
   meeting_cancelled: "Cancelación",
   weekly_confirmation: "Confirmación semanal",
   weekly_reactivation: "Reactivación",
+  availability_update_required: "Actualizar disponibilidad",
   weekly_no_match: "Sin match",
   weekly_holiday: "Festivo",
 };

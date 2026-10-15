@@ -253,3 +253,27 @@ export function dateForWeekday(weekCode: string, weekdayIndex: number) {
   const target = new Date(monday.getTime() + weekdayIndex * 86400000);
   return target.toISOString().slice(0, 10);
 }
+
+export function isAvailabilitySlotConfigured(
+  slotId: string,
+  config: MeetingConfig,
+) {
+  const parts = slotId.split("|");
+  const virtual = parts[0] === "virtual";
+  const date = parts[virtual ? 1 : 2];
+  const time = parts[virtual ? 2 : 3];
+  if (!date || !time) return false;
+  if (!config.days.some((day) => day.date === date && day.enabled))
+    return false;
+  if (!config.times.includes(time)) return false;
+  if (virtual) return parts.length === 3;
+  const [cityName, placeName] = parts;
+  return config.cities.some(
+    (city) =>
+      city.name.toLocaleLowerCase() === cityName.toLocaleLowerCase() &&
+      city.places.some(
+        (place) =>
+          place.name.toLocaleLowerCase() === placeName.toLocaleLowerCase(),
+      ),
+  );
+}

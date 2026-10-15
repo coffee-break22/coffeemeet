@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   advanceMeetingConfig,
+  isAvailabilitySlotConfigured,
   weeklyMatchingOpensAt,
   type MeetingConfig,
 } from "../src/data/meetingConfig.ts";
@@ -82,4 +83,23 @@ test("matching abre el lunes a las 10 en Colombia", () => {
     weeklyMatchingOpensAt("2026-W37")?.toISOString(),
     "2026-09-07T15:00:00.000Z",
   );
+});
+test("invalida opciones retiradas de la configuración", () => {
+  const configured: MeetingConfig = {
+    ...config,
+    cities: [{ id: "bogota", name: "Bogotá", places: [{ id: "parque-93", name: "Parque de la 93" }] }],
+    days: [{ ...config.days[0], blocked: false }],
+    times: ["10:00"],
+  };
+  const slot = "Bogotá|Parque de la 93|2026-09-01|10:00";
+  assert.equal(isAvailabilitySlotConfigured(slot, configured), true);
+  assert.equal(isAvailabilitySlotConfigured(slot, { ...configured, cities: [] }), false);
+  assert.equal(isAvailabilitySlotConfigured(slot, { ...configured, cities: [{ ...configured.cities[0], places: [] }] }), false);
+  assert.equal(isAvailabilitySlotConfigured(slot, { ...configured, days: [{ ...configured.days[0], enabled: false }] }), false);
+  assert.equal(isAvailabilitySlotConfigured(slot, { ...configured, times: ["11:00"] }), false);
+});
+test("virtual exige día y hora configurados", () => {
+  const configured: MeetingConfig = { ...config, days: [{ ...config.days[0], blocked: false }], times: ["10:00"] };
+  assert.equal(isAvailabilitySlotConfigured("virtual|2026-09-01|10:00", configured), true);
+  assert.equal(isAvailabilitySlotConfigured("virtual|2026-09-01|11:00", configured), false);
 });

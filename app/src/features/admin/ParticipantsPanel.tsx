@@ -59,7 +59,12 @@ const emptyLive: LiveConfirmationsPage = {
   windowOpen: false,
   items: [],
   total: 0,
-  counts: { confirmed: 0, pending: 0, withdrawn: 0 },
+  counts: {
+    confirmed: 0,
+    pending: 0,
+    withdrawn: 0,
+    needsAvailability: 0,
+  },
   opensAt: "",
   closesAt: "",
 };
@@ -279,6 +284,7 @@ export function ParticipantsPanel() {
     confirmed: "Confirmado",
     pending: "Pendiente",
     withdrawn: "Retirado",
+    needs_availability: "Actualizar disponibilidad",
   };
   const previousTone: Record<WeeklyStatus, string> = {
     confirmed: "tone-green",
@@ -289,6 +295,7 @@ export function ParticipantsPanel() {
     confirmed: "tone-green",
     pending: "tone-gold",
     withdrawn: "tone-crimson",
+    needs_availability: "tone-gold",
   };
 
   return (
@@ -396,6 +403,10 @@ export function ParticipantsPanel() {
           <div className="status-chip tone-crimson">
             <strong>{live.counts.withdrawn}</strong>
             <span>Retirados de esta semana</span>
+          </div>
+          <div className="status-chip tone-gold">
+            <strong>{live.counts.needsAvailability}</strong>
+            <span>Deben actualizar disponibilidad</span>
           </div>
         </div>
       )}
@@ -680,7 +691,7 @@ export function ParticipantsPanel() {
                       </>
                     )}
                   </dl>
-                  {selectedLive.status !== "withdrawn" && (
+                  {!["withdrawn", "needs_availability"].includes(selectedLive.status) && (
                     <div className="modal-actions">
                       <button
                         type="button"

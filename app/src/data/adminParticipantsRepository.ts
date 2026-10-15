@@ -127,14 +127,14 @@ export interface LiveParticipant {
   email: string;
   phone: string;
   school: string;
-  status: "confirmed" | "pending" | "withdrawn";
+  status: "confirmed" | "pending" | "withdrawn" | "needs_availability";
   confirmedAt: string | null;
 }
 export interface LiveConfirmationsPage {
   windowOpen: boolean;
   items: LiveParticipant[];
   total: number;
-  counts: { confirmed: number; pending: number; withdrawn: number };
+  counts: { confirmed: number; pending: number; withdrawn: number; needsAvailability: number };
   opensAt: string;
   closesAt: string;
 }
@@ -148,7 +148,7 @@ export async function loadLiveConfirmationsPage(filters: {
     windowOpen: false,
     items: [],
     total: 0,
-    counts: { confirmed: 0, pending: 0, withdrawn: 0 },
+    counts: { confirmed: 0, pending: 0, withdrawn: 0, needsAvailability: 0 },
     opensAt: "",
     closesAt: "",
   };
@@ -183,7 +183,7 @@ export async function loadLiveConfirmationsPage(filters: {
       confirmedAt: row.confirmedAt ? String(row.confirmedAt) : null,
     })),
     total: Number(value.total ?? 0),
-    counts: value.counts ?? { confirmed: 0, pending: 0, withdrawn: 0 },
+    counts: value.counts ?? { confirmed: 0, pending: 0, withdrawn: 0, needsAvailability: 0 },
     opensAt: value.opensAt ?? "",
     closesAt: value.closesAt ?? "",
   };

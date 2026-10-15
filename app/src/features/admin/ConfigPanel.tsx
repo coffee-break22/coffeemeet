@@ -9,6 +9,7 @@ import {
   type MeetingConfig,
 } from "../../data/meetingConfig.ts";
 import {
+  loadMeetingConfigChangeImpact,
   loadRemoteMeetingConfig,
   saveRemoteMeetingConfig,
 } from "../../data/meetingConfigRepository.ts";
@@ -19,6 +20,7 @@ import {
 } from "../../data/simulatedClockRepository.ts";
 import { useAuth } from "../auth/useAuth.ts";
 import { useToast } from "../feedback/ToastProvider.tsx";
+import { confirmDestructive } from "../feedback/confirmDestructive.ts";
 function toLocalInputValue(iso: string) {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -120,7 +122,6 @@ export function ConfigPanel() {
       | "time"
       | "school"
       | "day"
-      | "removeCity"
       | "removeSchool";
     cityId?: string;
     value: string;
@@ -129,16 +130,33 @@ export function ConfigPanel() {
   const availableWeekdays = WEEKDAY_ORDER.filter(
     (weekday) => !usedWeekdays.has(weekday),
   );
-  function submitDialog() {
+  async function confirmAvailabilityChange(
+    next: MeetingConfig,
+    title: string,
+    option: string,
+  ) {
+    try {
+      const impact = await loadMeetingConfigChangeImpact(next);
+      const details = impact.affectedParticipants
+        ? `La opción ${option} aparece en la disponibilidad de ${impact.affectedParticipants} participante${impact.affectedParticipants === 1 ? "" : "s"}. ${impact.participantsRequiringUpdate} ${impact.participantsRequiringUpdate === 1 ? "deberá" : "deberán"} actualizarla para participar. Las citas ya creadas y el historial no cambiarán.`
+        : `La opción ${option} dejará de aparecer en futuras selecciones. Las citas ya creadas y el historial no cambiarán.`;
+      const confirmed = await confirmDestructive({
+        title,
+        text: details,
+        confirmText: "Sí, aplicar cambio",
+      });
+      if (confirmed) setConfig(next);
+      return confirmed;
+    } catch {
+      toast.error("No pudimos calcular cuántos participantes serían afectados. No se guardó el cambio.");
+      return false;
+    }
+  }
+  async function submitDialog() {
     if (!dialog) return;
     const value = dialog.value.trim(),
       id = slug(value);
-    if (dialog.kind === "removeCity" && dialog.cityId)
-      setConfig((c) => ({
-        ...c,
-        cities: c.cities.filter((city) => city.id !== dialog.cityId),
-      }));
-    else if (dialog.kind === "removeSchool" && dialog.cityId) {
+    if (dialog.kind === "removeSchool" && dialog.cityId) {
       if (config.schools.length === 1) {
         toast.error(`Debe existir al menos una ${config.schoolCategoryLabel.toLowerCase()}.`);
         return;
@@ -329,11 +347,16 @@ export function ConfigPanel() {
                   className="icon-button"
                   title="Quitar ciudad"
                   onClick={() =>
-                    setDialog({
-                      kind: "removeCity",
-                      cityId: city.id,
-                      value: city.name,
-                    })
+                    void confirmAvailabilityChange(
+                      {
+                        ...config,
+                        cities: config.cities.filter(
+                          (candidate) => candidate.id !== city.id,
+                        ),
+                      },
+                      "Quitar ciudad",
+                      city.name,
+                    )
                   }
                 >
                   <Trash2 size={14} />
@@ -345,19 +368,18 @@ export function ConfigPanel() {
                     {place.name}
                     <button
                       onClick={() =>
-                        setConfig((c) => ({
-                          ...c,
-                          cities: c.cities.map((x) =>
-                            x.id === city.id
-                              ? {
-                                  ...x,
-                                  places: x.places.filter(
-                                    (p) => p.id !== place.id,
-                                  ),
-                                }
-                              : x,
-                          ),
-                        }))
+                        void confirmAvailabilityChange(
+                          {
+                            ...config,
+                            cities: config.cities.map((item) =>
+                              item.id === city.id
+                                ? { ...item, places: item.places.filter((candidate) => candidate.id !== place.id) }
+                                : item,
+                            ),
+                          },
+                          "Quitar lugar",
+                          place.name,
+                        )
                       }
                     >
                       ×
@@ -397,16 +419,17 @@ export function ConfigPanel() {
                 <input
                   type="checkbox"
                   checked={day.enabled}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      days: c.days.map((d) =>
-                        d.date === day.date
-                          ? { ...d, enabled: e.target.checked }
-                          : d,
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    const next = {
+                      ...config,
+                      days: config.days.map((item) =>
+                        item.date === day.date ? { ...item, enabled } : item,
                       ),
-                    }))
-                  }
+                    };
+                    if (enabled) setConfig(next);
+                    else void confirmAvailabilityChange(next, "Desactivar día", day.label);
+                  }}
                 />
                 <span>
                   <strong>{day.label}</strong>
@@ -520,10 +543,11 @@ export function ConfigPanel() {
                 {time}
                 <button
                   onClick={() =>
-                    setConfig((c) => ({
-                      ...c,
-                      times: c.times.filter((t) => t !== time),
-                    }))
+                    void confirmAvailabilityChange(
+                      { ...config, times: config.times.filter((item) => item !== time) },
+                      "Quitar hora",
+                      time,
+                    )
                   }
                 >
                   ×
@@ -615,10 +639,10 @@ export function ConfigPanel() {
                           ? `Agregar ${config.schoolCategoryLabel.toLowerCase()}`
                           : dialog.kind === "removeSchool"
                             ? `Quitar ${config.schoolCategoryLabel.toLowerCase()}`
-                            : "Quitar ciudad"}
+                            : "Agregar"}
               </h2>
             </div>
-            {["removeCity", "removeSchool"].includes(dialog.kind) ? (
+            {dialog.kind === "removeSchool" ? (
               <p>
                 Se quitará <strong>{dialog.value}</strong> de las opciones
                 futuras. Los registros existentes conservarán su valor.
@@ -665,13 +689,13 @@ export function ConfigPanel() {
               </button>
               <button
                 className={
-                  ["removeCity", "removeSchool"].includes(dialog.kind)
+                  dialog.kind === "removeSchool"
                     ? "danger-button"
                     : "primary"
                 }
-                onClick={submitDialog}
+                onClick={() => void submitDialog()}
               >
-                {["removeCity", "removeSchool"].includes(dialog.kind)
+                {dialog.kind === "removeSchool"
                   ? "Quitar"
                   : "Guardar"}
               </button>

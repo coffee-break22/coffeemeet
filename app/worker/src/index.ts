@@ -506,9 +506,24 @@ async function scheduleWeeklyConfirmation() {
     .eq("week_code", weekCode)
     .eq("status", "pending");
   if (!pending?.length) return;
+  const { data: activeAvailability, error: activeAvailabilityError } = await db
+    .from("weekly_availabilities")
+    .select("user_id")
+    .eq("week_code", weekCode)
+    .eq("is_active", true)
+    .in(
+      "user_id",
+      pending.map((item) => item.user_id),
+    );
+  if (activeAvailabilityError) throw activeAvailabilityError;
+  const activeUsers = new Set(
+    (activeAvailability ?? []).map((item) => item.user_id),
+  );
+  const confirmable = pending.filter((item) => activeUsers.has(item.user_id));
+  if (!confirmable.length) return;
   const sunday = new Date(monday);
   sunday.setUTCDate(sunday.getUTCDate() - 1);
-  const jobs = pending.flatMap((p) => [
+  const jobs = confirmable.flatMap((p) => [
     {
       kind: "weekly_confirmation",
       payload: { userId: p.user_id, weekCode, stage: "sunday" },
@@ -684,6 +699,75 @@ async function weeklyConfirmedAckJob(job: Job) {
     `✅ Confirmado, ${first}. Participarás en el sorteo de esta semana si hay alguien compatible disponible — te avisamos en cuanto se arme tu match.`,
   );
 }
+async function availabilityUpdateRequiredJob(job: Job) {
+  if (!socket) throw new Error("WHATSAPP_NOT_CONNECTED");
+  const { data: profile, error } = await db
+    .from("profiles")
+    .select("id,full_name,phone")
+    .eq("id", job.payload.userId)
+    .single();
+  if (error) throw error;
+  const { count: activeSlots, error: availabilityError } = await db
+    .from("weekly_availabilities")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", profile.id)
+    .eq("week_code", job.payload.weekCode)
+    .eq("is_active", true);
+  if (availabilityError) throw availabilityError;
+  if ((activeSlots ?? 0) > 0) return;
+  const { data: meeting, error: meetingError } = await db
+    .from("meetings")
+    .select("id")
+    .eq("week_code", job.payload.weekCode)
+    .or(`user_a_id.eq.${profile.id},user_b_id.eq.${profile.id}`)
+    .neq("status", "draft")
+    .limit(1)
+    .maybeSingle();
+  if (meetingError) throw meetingError;
+  if (meeting) return;
+  const first = profile.full_name.split(" ")[0];
+  await sendTracked(
+    job,
+    profile.phone,
+    `Hola ${first} 👋 Una opción de tu disponibilidad habitual ya no está disponible. Actualiza tus lugares, días u horas antes del lunes a las 10:00 a. m. para participar esta semana:\n${publicAppUrl}/?view=availability`,
+  );
+}
+async function adminNewRegistrationEmailJob(job: Job) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const to = process.env.ADMIN_NOTIFICATION_EMAIL;
+  if (!apiKey || !to) throw new Error("RESEND_NOT_CONFIGURED");
+  const p = job.payload;
+  const statusLabel =
+    p.status === "approved"
+      ? "Aprobado automáticamente"
+      : p.status === "rejected"
+        ? "Rechazado"
+        : "Pendiente de revisión manual";
+  const lines = [
+    `Nombre: ${p.fullName || "(sin nombre)"}`,
+    `Correo: ${p.email || "—"}`,
+    `Teléfono: ${p.phone || "—"}`,
+    `Escuela: ${p.school || "—"}`,
+    `Año de graduación: ${p.graduationYear || "—"}`,
+    `Ciudad: ${p.city || "—"}`,
+    `Estado: ${statusLabel}`,
+  ];
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: "CoffeeMeet <no-reply@coffeemeet.org>",
+      to: [to],
+      subject: `Nuevo registro en CoffeeMeet: ${p.fullName || p.email || "sin nombre"}`,
+      text: lines.join("\n"),
+    }),
+  });
+  if (!res.ok)
+    throw new Error(`RESEND_ERROR:${res.status}:${await res.text()}`);
+}
 async function accountDeletionJob(job: Job) {
   const { error } = await db.auth.admin.deleteUser(job.payload.userId);
   // Idempotente: si ya no existe en Auth (reintento, o ya se borró antes),
@@ -695,6 +779,10 @@ async function processJob(job: Job) {
   else if (job.kind === "calendar_cancel") await calendarCancelJob(job);
   else if (job.kind === "weekly_confirmation") await weeklyConfirmationJob(job);
   else if (job.kind === "weekly_confirmed_ack") await weeklyConfirmedAckJob(job);
+  else if (job.kind === "availability_update_required")
+    await availabilityUpdateRequiredJob(job);
+  else if (job.kind === "admin_new_registration_email")
+    await adminNewRegistrationEmailJob(job);
   else if (job.kind === "weekly_reactivation") await weeklyReactivationJob(job);
   else if (job.kind === "dormant_notice") await dormantNoticeJob(job);
   else if (job.kind === "account_deletion") await accountDeletionJob(job);

@@ -57,8 +57,8 @@ describe("ConfigPanel · modo local (auth.configured=false, autoguardado en loca
       renderWithProviders(<ConfigPanel />);
       const caliCard = screen.getByText("Cali").closest("article") as HTMLElement;
       await user.click(within(caliCard).getByTitle("Quitar ciudad"));
-      await screen.findByText(/Se quitará/);
-      await user.click(screen.getByRole("button", { name: "Quitar" }));
+      await screen.findByText("Quitar ciudad");
+      await user.click(screen.getByRole("button", { name: "Sí, aplicar cambio" }));
 
       await waitFor(() => {
         expect(screen.queryByText("Cali")).not.toBeInTheDocument();

@@ -130,12 +130,15 @@ const emptyEntry = (): RegistryEntry => ({
 function App() {
   const requestedView = new URLSearchParams(window.location.search).get("view");
   const meetingDeepLink = requestedView === "meetings";
+  const availabilityDeepLink = requestedView === "availability";
   const resetPasswordDeepLink = requestedView === "reset-password";
   const auth = useAuth();
   const toast = useToast();
   const { config: meetingConfig } = useMeetingConfig(auth.configured);
   const schools = meetingConfig.schools;
-  const [showAccess, setShowAccess] = useState(meetingDeepLink),
+  const [showAccess, setShowAccess] = useState(
+      meetingDeepLink || availabilityDeepLink,
+    ),
     [publicSignupActive, setPublicSignupActive] = useState(false),
     [menuOpen, setMenuOpen] = useState(false);
   const [view, setView] = useState<
@@ -154,7 +157,15 @@ function App() {
       | "reputation"
       | "notifications"
       | "reset-password"
-    >(meetingDeepLink ? "meetings" : resetPasswordDeepLink ? "reset-password" : "auth"),
+    >(
+      meetingDeepLink
+        ? "meetings"
+        : availabilityDeepLink
+          ? "signup"
+          : resetPasswordDeepLink
+            ? "reset-password"
+            : "auth",
+    ),
     [entries, setEntries] = useState<RegistryEntry[]>(loadRegistry),
     [editing, setEditing] = useState<RegistryEntry | null>(null),
     [query, setQuery] = useState(""),
