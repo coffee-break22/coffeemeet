@@ -768,6 +768,45 @@ async function adminNewRegistrationEmailJob(job: Job) {
   if (!res.ok)
     throw new Error(`RESEND_ERROR:${res.status}:${await res.text()}`);
 }
+// Semana del lanzamiento (09 de noviembre de 2026). Hasta esa semana, el
+// mensaje de bienvenida anuncia la fecha fija del primer sorteo; de ahí en
+// adelante (operación normal, ya con el ciclo semanal corriendo) dice "el
+// próximo domingo", genérico para cualquier semana.
+const LAUNCH_WEEK_CODE = "2026-W46";
+async function registrationWelcomeJob(job: Job) {
+  if (!socket) throw new Error("WHATSAPP_NOT_CONNECTED");
+  const { data: p, error } = await db
+    .from("profiles")
+    .select("id,full_name,phone")
+    .eq("id", job.payload.userId)
+    .single();
+  if (error) throw error;
+  const { data: row } = await db
+    .from("meeting_config")
+    .select("value")
+    .eq("key", "current")
+    .maybeSingle();
+  const weekCode = String(
+    (row?.value as { weekCode?: string } | null)?.weekCode ?? "",
+  );
+  const summary = /^\d{4}-W\d{2}$/.test(weekCode)
+    ? await availabilitySummary(p.id, weekCode)
+    : "sin disponibilidad guardada";
+  const first = p.full_name.split(" ")[0];
+  const next =
+    weekCode && weekCode <= LAUNCH_WEEK_CODE
+      ? "📲 ¿Qué sigue? Por ahora no tienes que hacer nada. El domingo 8 de noviembre a las 7:00 p. m. te escribiremos por aquí para preguntarte si quieres participar en el sorteo de citas de la semana. Ahí sí te pediremos responder."
+      : "📲 ¿Qué sigue? Por ahora no tienes que hacer nada. El próximo domingo a las 7:00 p. m. te escribiremos por aquí para preguntarte si quieres participar en el sorteo de citas de la semana. Ahí sí te pediremos responder. Y así cada domingo: tú decides cada semana si participas.";
+  await sendTracked(
+    job,
+    p.phone,
+    `👋 ¡Bienvenido a CoffeeMeet, ${first}! Ya haces parte de la iniciativa del MIT Harvard Club Colombia.\n\n` +
+      `☕ Cada semana juntamos a dos alumni de MIT y Harvard para un café de 30 minutos, virtual o presencial.\n\n` +
+      `🗓️ Tu disponibilidad registrada: ${summary}. Puedes cambiarla cuando quieras entrando a ${publicAppUrl}.\n\n` +
+      `${next}\n\n` +
+      `💾 Guarda este número para no perderte ningún mensaje.`,
+  );
+}
 async function accountDeletionJob(job: Job) {
   const { error } = await db.auth.admin.deleteUser(job.payload.userId);
   // Idempotente: si ya no existe en Auth (reintento, o ya se borró antes),
@@ -779,6 +818,7 @@ async function processJob(job: Job) {
   else if (job.kind === "calendar_cancel") await calendarCancelJob(job);
   else if (job.kind === "weekly_confirmation") await weeklyConfirmationJob(job);
   else if (job.kind === "weekly_confirmed_ack") await weeklyConfirmedAckJob(job);
+  else if (job.kind === "registration_welcome") await registrationWelcomeJob(job);
   else if (job.kind === "availability_update_required")
     await availabilityUpdateRequiredJob(job);
   else if (job.kind === "admin_new_registration_email")
