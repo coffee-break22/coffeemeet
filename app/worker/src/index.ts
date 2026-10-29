@@ -961,6 +961,13 @@ async function handleConnectionCommand() {
 // outbox (sendTracked) ya guardan el texto en outbox.sent_text; las
 // respuestas directas a comandos entrantes (incoming(), más abajo) no
 // pasan por outbox, así que se guardan aparte en este cache acotado.
+// Bug real encontrado en pruebas (2026-10-29): si el worker se reinicia
+// entre el envío de la respuesta y el reintento de cifrado que WhatsApp
+// pide poco después, este cache en memoria se pierde — getMessage() ya
+// no encuentra el texto y la respuesta queda en "Esperando el mensaje"
+// para siempre, aunque desde WhatsApp Web sí se vea bien (no depende de
+// ese reintento). Por eso también se guarda en outbox (igual que
+// sendTracked), que sí sobrevive un reinicio.
 const sentMessageCache = new Map<string, string>();
 function rememberSent(id: string | null | undefined, text: string) {
   if (!id) return;
@@ -969,6 +976,25 @@ function rememberSent(id: string | null | undefined, text: string) {
     const oldest = sentMessageCache.keys().next().value;
     if (oldest) sentMessageCache.delete(oldest);
   }
+  void db
+    .from("outbox")
+    .insert({
+      kind: "direct_reply",
+      payload: {},
+      idempotency_key: `direct-reply:${id}`,
+      status: "succeeded",
+      external_id: id,
+      sent_text: text,
+      sent_at: new Date().toISOString(),
+      processed_at: new Date().toISOString(),
+    })
+    .then(({ error }) => {
+      if (error)
+        log.error(
+          { err: error, id },
+          "could not persist direct reply for retry safety",
+        );
+    });
 }
 async function getMessage(
   key: proto.IMessageKey,

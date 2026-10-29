@@ -78,12 +78,18 @@ export async function confirmParticipation(
     p_week_code: weekCode,
     p_user_id: profile.id,
   });
-  await sendFn(
-    jid(profile.phone),
-    error
-      ? "No pudimos confirmar: el plazo puede haber cerrado o tu cuenta aún no está aprobada."
-      : "¡Confirmado! Participarás en el matching de esta semana si existe una disponibilidad compatible.",
-  );
+  // Sin texto de éxito aquí a propósito: confirmar (por WhatsApp o desde la
+  // web) dispara el trigger `enqueue_confirmation_ack` sobre
+  // weekly_participations, que ya manda el "✅ Confirmado..." — mandar
+  // también un mensaje de éxito aquí duplicaba la confirmación (bug real
+  // visto en pruebas, 2026-10-29). El error sí hace falta: si falla, esa
+  // es la única vía por la que la persona se entera.
+  if (error) {
+    await sendFn(
+      jid(profile.phone),
+      "No pudimos confirmar: el plazo puede haber cerrado o tu cuenta aún no está aprobada.",
+    );
+  }
 }
 
 export async function incoming(senderJid: string, raw: string, sendFn: SendFn) {
