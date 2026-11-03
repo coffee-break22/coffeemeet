@@ -1,8 +1,4 @@
--- Al cambiar la semana configurada (adelantar/pausar), cierra lo que haya
--- quedado 'pending' en semanas anteriores y cancela avisos ya encolados
--- para esas semanas abandonadas — de lo contrario quedan disparando solos
--- cuando el reloj (real o simulado) alcanza su fecha original de envío,
--- sin importar que la semana configurada ya sea otra.
+
 create or replace function public.close_stale_weekly_confirmations(p_current_week text)
 returns void language plpgsql security definer set search_path=public as $$
 begin

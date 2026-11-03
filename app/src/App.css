@@ -396,6 +396,17 @@ td small {
   color: var(--muted);
   opacity: 0.8;
 }
+.advance-week-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.advance-week-preview {
+  color: var(--muted);
+  font-weight: 600;
+}
 .category-toggle {
   display: flex;
   flex-direction: row;
@@ -616,6 +627,21 @@ textarea {
 .import-modal {
   max-height: 88vh;
   overflow: auto;
+}
+.csv-default-school {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 24px 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.csv-default-school select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--dark);
 }
 .import-summary {
   padding: 14px 24px;
@@ -2722,6 +2748,45 @@ dd {
   width: max-content;
   text-decoration: none;
   min-height: 46px;
+}
+.landing-cta-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.landing-free-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ok, #2f6b4c);
+}
+.promo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--crimson);
+  color: #fff;
+  padding: 10px 24px;
+  font-size: 13.5px;
+  text-align: center;
+}
+.promo-banner strong {
+  font-weight: 700;
+}
+.promo-banner-cta {
+  background: #fff;
+  color: var(--crimson);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-weight: 700;
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
 }
 .landing-visual {
   position: relative;

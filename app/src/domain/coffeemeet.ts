@@ -115,12 +115,18 @@ export function classifyCancellation(
 export interface CsvPreviewRow {
   row: number;
   entry?: Omit<RegistryEntry, "id" | "updatedAt">;
+  // Nombre/contacto detectados en la fila aunque falte algún dato (p.ej.
+  // la escuela) — para que la previsualización pueda mostrar a quién
+  // pertenece cada error y permitir corregirlo fila por fila.
+  raw: { fullName: string; email: string; phone: string };
   errors: string[];
   duplicate: boolean;
 }
 export function parseRegistryCsv(
   text: string,
   current: RegistryEntry[],
+  defaultSchool?: string,
+  rowSchoolOverrides?: Record<number, string>,
 ): CsvPreviewRow[] {
   const lines = text
     .replace(/^\uFEFF/, "")
@@ -158,20 +164,74 @@ export function parseRegistryCsv(
     values.push(current.trim());
     return values;
   };
-  const headers = split(lines[0]).map((h) => normalizeEmail(h));
+  const headers = split(lines[0]).map((h) =>
+    normalizeEmail(h).replace(/\.+$/, "").trim(),
+  );
   const at = (values: string[], names: string[]) => {
-    const i = headers.findIndex((h) => names.includes(h));
-    return i >= 0 ? (values[i] ?? "") : "";
+    for (const name of names) {
+      const i = headers.indexOf(name);
+      if (i >= 0 && (values[i] ?? "").trim()) return values[i].trim();
+    }
+    return "";
   };
   return lines.slice(1).map((line, index) => {
     const v = split(line);
-    const fullName = at(v, ["nombre", "name", "full_name"]);
-    const email = at(v, ["email", "correo"]);
-    const phone = at(v, ["telefono", "teléfono", "phone", "whatsapp"]);
-    const schoolRaw = normalizeEmail(at(v, ["escuela", "school"]));
-    const year = Number(
-      at(v, ["anio", "año", "graduation_year", "promocion", "promoción"]),
+    const combinedName = at(v, [
+      "nombre y apellidos",
+      "nombre completo",
+      "full_name",
+      "name",
+    ]);
+    const firstName = at(v, [
+      "nombre",
+      "primernombre",
+      "primer nombre",
+      "first_name",
+    ]);
+    const lastName = at(v, [
+      "apellido",
+      "apellidos",
+      "primer apellido",
+      "surname",
+      "last_name",
+    ]);
+    const fullName =
+      combinedName || [firstName, lastName].filter(Boolean).join(" ").trim();
+    const email = at(v, [
+      "email",
+      "correo",
+      "correo distribución",
+      "correo distribucion",
+      "e-mail",
+      "mail",
+    ]);
+    const phone = at(v, [
+      "telefono",
+      "teléfono",
+      "phone",
+      "whatsapp",
+      "celular",
+      "tel",
+      "tel fijo",
+      "telefono fijo",
+    ]);
+    const schoolColumnRaw = normalizeEmail(
+      at(v, ["universidad", "afiliación", "afiliacion", "escuela", "school"]),
     );
+    const schoolOverride = rowSchoolOverrides?.[index + 2];
+    const schoolRaw =
+      schoolColumnRaw ||
+      normalizeEmail(schoolOverride || defaultSchool || "");
+    const yearRaw = at(v, [
+      "anio",
+      "año",
+      "año de grado",
+      "año grado pregrado",
+      "graduation_year",
+      "promocion",
+      "promoción",
+    ]);
+    const year = yearRaw ? Number(yearRaw) : 0;
     const school: School =
       schoolRaw.includes("harvard") && schoolRaw.includes("mit")
         ? "harvard_mit"
@@ -188,7 +248,7 @@ export function parseRegistryCsv(
     if (!fullName) errors.push("Falta nombre");
     if (!email && !phone) errors.push("Falta email o teléfono");
     if (!school) errors.push("Falta escuela");
-    if (!Number.isInteger(year) || year < 1900 || year > 2100)
+    if (yearRaw && (!Number.isInteger(year) || year < 1900 || year > 2100))
       errors.push("Año inválido");
     const duplicate = current.some(
       (e) =>
@@ -199,6 +259,7 @@ export function parseRegistryCsv(
       row: index + 2,
       errors,
       duplicate,
+      raw: { fullName, email, phone },
       entry: errors.length
         ? undefined
         : {

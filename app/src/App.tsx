@@ -174,6 +174,11 @@ function App() {
       ReturnType<typeof matchRegistry> | undefined
     >(),
     [preview, setPreview] = useState<CsvPreviewRow[] | null>(null),
+    [csvText, setCsvText] = useState<string | null>(null),
+    [csvDefaultSchool, setCsvDefaultSchool] = useState(""),
+    [rowSchoolOverrides, setRowSchoolOverrides] = useState<
+      Record<number, string>
+    >({}),
     [registryPage, setRegistryPage] = useState(1),
     [registrySchool, setRegistrySchool] = useState<School | "">(""),
     [registryRegistered, setRegistryRegistered] = useState<
@@ -317,7 +322,26 @@ function App() {
   }
   async function selectCsv(file?: File) {
     if (!file) return;
-    setPreview(parseRegistryCsv(await file.text(), entries));
+    const text = await file.text();
+    setCsvText(text);
+    setCsvDefaultSchool("");
+    setRowSchoolOverrides({});
+    setPreview(parseRegistryCsv(text, entries));
+  }
+  function applyCsvDefaultSchool(value: string) {
+    setCsvDefaultSchool(value);
+    if (csvText)
+      setPreview(
+        parseRegistryCsv(csvText, entries, value || undefined, rowSchoolOverrides),
+      );
+  }
+  function setRowSchool(row: number, value: string) {
+    const next = { ...rowSchoolOverrides, [row]: value };
+    setRowSchoolOverrides(next);
+    if (csvText)
+      setPreview(
+        parseRegistryCsv(csvText, entries, csvDefaultSchool || undefined, next),
+      );
   }
   async function commitImport() {
     if (!preview) return;
@@ -332,6 +356,7 @@ function App() {
       const saved = auth.configured ? await importAdminRegistry(valid) : valid;
       setEntries((c) => [...saved, ...c]);
       setPreview(null);
+      setCsvText(null);
       if (remoteRegistry) {
         setRegistryPage(1);
         setRegistryRefresh((value) => value + 1);
@@ -370,6 +395,18 @@ function App() {
     );
   return (
     <main>
+      {!auth.isAdmin && (
+        <div className="promo-banner">
+          <Coffee size={16} />
+          <span>
+            ¡Arrancamos! La primera edición será la{" "}
+            <strong>semana del 09 de noviembre</strong>.
+          </span>
+          <a className="promo-banner-cta" href="#inscripcion">
+            Regístrate ya
+          </a>
+        </div>
+      )}
       <header className={`topbar${auth.isAdmin ? " topbar-admin" : ""}`}>
         <Brand />
         <button
@@ -933,10 +970,31 @@ function App() {
                 <h2>Previsualizar importación</h2>
                 <p>Nada se guarda hasta confirmar.</p>
               </div>
-              <button className="icon-button" onClick={() => setPreview(null)}>
+              <button
+                className="icon-button"
+                onClick={() => {
+                  setPreview(null);
+                  setCsvText(null);
+                }}
+              >
                 <X />
               </button>
             </div>
+            <label className="csv-default-school">
+              Afiliación por defecto para filas sin escuela (puedes ajustar
+              cada una por separado abajo)
+              <select
+                value={csvDefaultSchool}
+                onChange={(e) => applyCsvDefaultSchool(e.target.value)}
+              >
+                <option value="">Sin asignar (deja el error)</option>
+                {schools.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="import-summary">
               {preview.filter((r) => r.entry && !r.duplicate).length} nuevos ·{" "}
               {preview.filter((r) => r.duplicate).length} duplicados ·{" "}
@@ -949,6 +1007,7 @@ function App() {
                     <th>Fila</th>
                     <th>Nombre</th>
                     <th>Contacto</th>
+                    <th>Escuela</th>
                     <th>Resultado</th>
                   </tr>
                 </thead>
@@ -956,8 +1015,25 @@ function App() {
                   {preview.map((r) => (
                     <tr key={r.row}>
                       <td>{r.row}</td>
-                      <td>{r.entry?.fullName || "—"}</td>
-                      <td>{r.entry?.email || r.entry?.phone || "—"}</td>
+                      <td>{r.raw.fullName || "—"}</td>
+                      <td>{r.raw.email || r.raw.phone || "—"}</td>
+                      <td>
+                        {r.errors.includes("Falta escuela") ? (
+                          <select
+                            value={rowSchoolOverrides[r.row] ?? ""}
+                            onChange={(e) => setRowSchool(r.row, e.target.value)}
+                          >
+                            <option value="">Elegir…</option>
+                            {schools.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          schoolLabel(r.entry?.school ?? "", schools)
+                        )}
+                      </td>
                       <td>
                         {r.errors.join(", ") ||
                           (r.duplicate ? "Posible duplicado" : "Listo")}
@@ -968,7 +1044,13 @@ function App() {
               </table>
             </div>
             <div className="modal-actions">
-              <button className="secondary" onClick={() => setPreview(null)}>
+              <button
+                className="secondary"
+                onClick={() => {
+                  setPreview(null);
+                  setCsvText(null);
+                }}
+              >
                 Cancelar
               </button>
               <button className="primary" onClick={() => void commitImport()}>
