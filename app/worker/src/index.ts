@@ -344,6 +344,14 @@ let activeSocket: WASocket | undefined;
 let connecting = false;
 let suppressAutoReconnect = false;
 let lastHeartbeatAt = 0;
+// Bug real (2026-11-03): un 403 de WhatsApp significa que la cuenta está
+// bloqueada o en revisión de Meta — reintentar cada 3s en ese caso no la
+// reconecta nunca, solo le manda cientos de solicitudes rechazadas por hora,
+// que es justo el patrón que hace ver la cuenta como un bot y puede alargar
+// o empeorar la revisión. Tras varios 403 seguidos, se deja de reintentar
+// solo y se espera un reconectar manual desde Admin > Notificaciones.
+let consecutive403Count = 0;
+const MAX_CONSECUTIVE_403 = 3;
 const healthServer=createServer((request,response)=>{
   if(request.url!=="/"&&request.url!=="/health"){
     response.writeHead(404,{"content-type":"application/json"});
@@ -929,6 +937,7 @@ async function handleConnectionCommand() {
     .eq("requested_command", command);
   if (clearError) throw clearError;
   suppressAutoReconnect = true;
+  consecutive403Count = 0;
   const current = activeSocket;
   socket = undefined;
   activeSocket = undefined;
@@ -1043,6 +1052,7 @@ async function connect() {
           );
       }
       if (connection === "open") {
+        consecutive403Count = 0;
         socket = sock;
         void updateConnectionState({
           status: "connected",
@@ -1058,19 +1068,28 @@ async function connect() {
         if (activeSocket === sock) activeSocket = undefined;
         const status = (lastDisconnect?.error as Boom)?.output?.statusCode;
         const loggedOut = status === DisconnectReason.loggedOut;
+        consecutive403Count = status === 403 ? consecutive403Count + 1 : 0;
+        const blocked = consecutive403Count >= MAX_CONSECUTIVE_403;
         void updateConnectionState({
-          status: loggedOut ? "logged_out" : "offline",
+          status: loggedOut ? "logged_out" : blocked ? "error" : "offline",
           qr_data_url: null,
           last_error: loggedOut
             ? "La sesión fue cerrada. Vuelve a conectar para generar un QR."
-            : lastDisconnect?.error instanceof Error
-              ? lastDisconnect.error.message
-              : null,
+            : blocked
+              ? "WhatsApp rechazó la conexión varias veces seguidas (403) — probablemente la cuenta está bloqueada o en revisión de Meta. Se detuvieron los reintentos automáticos; reconecta manualmente cuando confirmes que ya puede volver a usarse."
+              : lastDisconnect?.error instanceof Error
+                ? lastDisconnect.error.message
+                : null,
         });
-        if (!loggedOut && !suppressAutoReconnect)
+        if (!loggedOut && !blocked && !suppressAutoReconnect)
           setTimeout(() => void connect(), 3000);
         else if (loggedOut) log.error("WhatsApp logged out");
-        if (!loggedOut)
+        else if (blocked)
+          log.error(
+            { status, consecutive403Count },
+            "WhatsApp returned 403 repeatedly; stopping automatic reconnect",
+          );
+        if (!loggedOut && !blocked)
           log.warn({ status, retryInMs: 3000 }, "WhatsApp disconnected; reconnecting");
       }
     });
