@@ -41,13 +41,45 @@ const whatsappProvider =
 const CLOUD_TEMPLATES: Record<string, string> = {
   weekly_confirmation_sunday: "coffeemeet_confirmacion_domingo",
   weekly_confirmation_monday: "coffeemeet_ultimo_aviso",
+  weekly_confirmed_ack: "coffeemeet_confirmado",
   match_whatsapp: "coffeemeet_match_asignado",
-  meeting_reminder: "coffeemeet_recordatorio_cita",
+  meeting_reminder_24h: "coffeemeet_recordatorio_24h",
+  meeting_reminder_3h: "coffeemeet_recordatorio_3h",
+  meeting_reminder_30m: "coffeemeet_recordatorio_30m",
+  meeting_cancelled: "coffeemeet_cita_cancelada",
+  attendance_survey: "coffeemeet_encuesta",
   weekly_outcome_no_match: "coffeemeet_sin_match",
   weekly_outcome_holiday: "coffeemeet_festivo",
   weekly_reactivation: "coffeemeet_reactivacion",
+  dormant_notice: "coffeemeet_te_extranamos",
   registration_welcome: "coffeemeet_bienvenida",
 };
+// Envía por plantilla cuando el transporte es "cloud" y hay una registrada
+// para esta clave; si no, cae a sendTracked de texto libre (sirve igual
+// mientras se prueba con Baileys, o para respuestas que sí están dentro de
+// la ventana de 24h). `params` va en el mismo orden que las variables
+// {{1}}, {{2}}... del cuerpo aprobado en WhatsApp Manager.
+async function sendColdTracked(
+  job: Job,
+  phone: string,
+  templateKey: string,
+  params: string[],
+  fallbackText: string,
+) {
+  if (job.external_id || job.sent_at) return;
+  const templateName = CLOUD_TEMPLATES[templateKey];
+  if (whatsappProvider === "cloud" && templateName) {
+    const externalId = await sendCloudTemplate(phone, templateName, params);
+    const { error } = await db.rpc("record_outbox_delivery", {
+      p_id: job.id,
+      p_external_id: externalId,
+      p_text: fallbackText,
+    });
+    if (error) throw error;
+    return;
+  }
+  await sendTracked(job, phone, fallbackText);
+}
 const required = (name: string) => {
   const value = process.env[name];
   if (!value) throw new Error(`Missing ${name}`);
@@ -504,7 +536,8 @@ function messageText(
   return `☕ Tu café CoffeeMeet de esta semana: ${other.full_name}.\n📅 ${formatDate(s.date)} · ${s.time}\n📍 ${where}\n📱 WhatsApp: ${other.phone}\n✉️ ${other.email}${other.linkedin_url ? `\n🔗 ${other.linkedin_url}` : ""}\n\nRecuerda: cancela con 3+ horas de anticipación si no puedes ir · el café dura 30 minutos · cámara encendida si es virtual.\n\n¿Nos regalas una foto para las redes del club? (opcional)\n\n🗓️ Agrégalo a tu calendario: ${calendarUrl}\n\n¿No puedes ir? Responde:\n1️⃣ Cancelar mi cita`;
 }
 async function whatsappJob(job: Job) {
-  if (!socket) throw new Error("WHATSAPP_NOT_CONNECTED");
+  if (whatsappProvider !== "cloud" && !socket)
+    throw new Error("WHATSAPP_NOT_CONNECTED");
   const { meeting, profiles } = await context(job.payload.meetingId);
   const { disabled: dayDisabled, reason: dayDisabledReason } =
     await dayDisabledOther(slot(meeting.slot_id).date);
@@ -529,7 +562,45 @@ async function whatsappJob(job: Job) {
   )
     throw new Error("MEET_LINK_PENDING");
   const body = messageText(job.kind, me, other, meeting, job.payload.label);
-  await sendTracked(job, me.phone, body, job.kind === "attendance_survey");
+  if (job.kind === "attendance_survey" || job.kind === "meeting_cancelled") {
+    await sendColdTracked(
+      job,
+      me.phone,
+      job.kind === "attendance_survey" ? "attendance_survey" : "meeting_cancelled",
+      job.kind === "attendance_survey" ? [other.full_name] : [other.full_name],
+      body,
+    );
+  } else if (job.kind === "meeting_reminder") {
+    const s = slot(meeting.slot_id),
+      where = s.virtual ? `Google Meet: ${meeting.meet_link ?? "en preparación"}` : `${s.place}, ${s.city}`;
+    await sendColdTracked(
+      job,
+      me.phone,
+      `meeting_reminder_${job.payload.label}`,
+      [other.full_name, where, s.time],
+      body,
+    );
+  } else {
+    const s = slot(meeting.slot_id),
+      where = s.virtual ? `Google Meet: ${meeting.meet_link ?? "en preparación"}` : `${s.place}, ${s.city}`,
+      calendarUrl = `${publicAppUrl}/cal/${meeting.short_code}`;
+    await sendColdTracked(
+      job,
+      me.phone,
+      "match_whatsapp",
+      [
+        other.full_name,
+        formatDate(s.date),
+        s.time,
+        where,
+        other.phone,
+        other.email,
+        other.linkedin_url || "no disponible",
+        calendarUrl,
+      ],
+      body,
+    );
+  }
   if (job.kind === "attendance_survey")
     await db.from("survey_sessions").upsert({
       meeting_id: meeting.id,
@@ -638,7 +709,8 @@ async function scheduleWeeklyConfirmation() {
   await db.from("outbox").upsert(jobs, { onConflict: "idempotency_key" });
 }
 async function weeklyReactivationJob(job: Job) {
-  if (!socket) throw new Error("WHATSAPP_NOT_CONNECTED");
+  if (whatsappProvider !== "cloud" && !socket)
+    throw new Error("WHATSAPP_NOT_CONNECTED");
   const { data: profile, error } = await db
     .from("profiles")
     .select("id,full_name,phone")
@@ -658,14 +730,18 @@ async function weeklyReactivationJob(job: Job) {
     .eq("user_id", profile.id)
     .maybeSingle();
   if (pref?.opted_out) return;
-  await sendTracked(
+  const first = profile.full_name.split(" ")[0];
+  await sendColdTracked(
     job,
     profile.phone,
-    `Hola ${profile.full_name.split(" ")[0]} 👋 Hay ${job.payload.newCount} alumni activos esta semana en tu ciudad o virtualmente con quienes todavía no has tomado café. Si quieres participar, responde REACTIVAR antes de las 10:00 a. m. del lunes. Si prefieres no recibir estas invitaciones, responde STOP.`,
+    "weekly_reactivation",
+    [first, String(job.payload.newCount)],
+    `Hola ${first} 👋 Hay ${job.payload.newCount} alumni activos esta semana en tu ciudad o virtualmente con quienes todavía no has tomado café. Si quieres participar, responde REACTIVAR antes de las 10:00 a. m. del lunes. Si prefieres no recibir estas invitaciones, responde STOP.`,
   );
 }
 async function dormantNoticeJob(job: Job) {
-  if (!socket) throw new Error("WHATSAPP_NOT_CONNECTED");
+  if (whatsappProvider !== "cloud" && !socket)
+    throw new Error("WHATSAPP_NOT_CONNECTED");
   const { data: profile, error } = await db
     .from("profiles")
     .select("id,full_name,phone,dormant_since")
@@ -686,14 +762,17 @@ async function dormantNoticeJob(job: Job) {
   const summary = lastAvailability
     ? await availabilitySummary(profile.id, lastAvailability.week_code)
     : "sin disponibilidad guardada";
-  await sendTracked(
+  await sendColdTracked(
     job,
     profile.phone,
+    "dormant_notice",
+    [summary],
     `*☕ Te extrañamos por acá — ¿seguimos?*\n\nTu taza de café se siente un poco sola ☕😢 — llevas 3 semanas sin aparecer por CoffeeMeet, y la extrañamos. Tu disponibilidad sigue guardada: ${summary}.\n\nResponde REACTIVAR para volver a participar.`,
   );
 }
 async function weeklyOutcomeJob(job: Job) {
-  if (!socket) throw new Error("WHATSAPP_NOT_CONNECTED");
+  if (whatsappProvider !== "cloud" && !socket)
+    throw new Error("WHATSAPP_NOT_CONNECTED");
   const { data: profile, error } = await db
     .from("profiles")
     .select("id,full_name,phone")
@@ -718,9 +797,11 @@ async function weeklyOutcomeJob(job: Job) {
   if (meeting) return;
   const first = profile.full_name.split(" ")[0];
   if (job.kind === "weekly_holiday") {
-    await sendTracked(
+    await sendColdTracked(
       job,
       profile.phone,
+      "weekly_outcome_holiday",
+      [],
       `🎉 Esta semana hay un festivo que afecta tus días elegidos, así que no hay CoffeeMeet. ¡Nos vemos la próxima semana!`,
     );
     return;
@@ -735,9 +816,14 @@ async function weeklyOutcomeJob(job: Job) {
   let hash = 0;
   for (const char of `${profile.id}:${job.payload.weekCode}`)
     hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  await sendTracked(
+  // Con plantillas de Meta no se pueden mandar 5 variantes de humor
+  // distintas sin registrar 5 plantillas — se simplifica a una sola versión
+  // fija para el modo cloud; con Baileys se conserva la variedad de siempre.
+  await sendColdTracked(
     job,
     profile.phone,
+    "weekly_outcome_no_match",
+    [first],
     alternatives[hash % alternatives.length],
   );
 }
@@ -759,7 +845,8 @@ async function availabilitySummary(userId: string, weekCode: string) {
     : "sin disponibilidad guardada";
 }
 async function weeklyConfirmationJob(job: Job) {
-  if (!socket) throw new Error("WHATSAPP_NOT_CONNECTED");
+  if (whatsappProvider !== "cloud" && !socket)
+    throw new Error("WHATSAPP_NOT_CONNECTED");
   const { data: p, error } = await db
     .from("profiles")
     .select("id,full_name,phone")
@@ -776,14 +863,21 @@ async function weeklyConfirmationJob(job: Job) {
   const first = p.full_name.split(" ")[0],
     summary = await availabilitySummary(p.id, job.payload.weekCode),
     options = "Responde con un número:\n1️⃣ Confirmar\n2️⃣ Editar mi disponibilidad\n3️⃣ Cancelar esta semana";
-  const text =
-    job.payload.stage === "monday"
-      ? `⏰ Aún no confirmas tu café de esta semana (${summary}). Si no confirmas antes de las 10:00 a. m., no podrás participar esta semana.\n\n${options}`
-      : `Hola ${first} 👋 Tu disponibilidad de esta semana: ${summary}. Confirmar es obligatorio para participar en el sorteo de esta semana.\n\n${options}`;
-  await sendTracked(job, p.phone, text);
+  const isMonday = job.payload.stage === "monday";
+  const text = isMonday
+    ? `⏰ Aún no confirmas tu café de esta semana (${summary}). Si no confirmas antes de las 10:00 a. m., no podrás participar esta semana.\n\n${options}`
+    : `Hola ${first} 👋 Tu disponibilidad de esta semana: ${summary}. Confirmar es obligatorio para participar en el sorteo de esta semana.\n\n${options}`;
+  await sendColdTracked(
+    job,
+    p.phone,
+    isMonday ? "weekly_confirmation_monday" : "weekly_confirmation_sunday",
+    isMonday ? [summary] : [first, summary],
+    text,
+  );
 }
 async function weeklyConfirmedAckJob(job: Job) {
-  if (!socket) throw new Error("WHATSAPP_NOT_CONNECTED");
+  if (whatsappProvider !== "cloud" && !socket)
+    throw new Error("WHATSAPP_NOT_CONNECTED");
   const { data: p, error } = await db
     .from("profiles")
     .select("id,full_name,phone")
@@ -791,14 +885,17 @@ async function weeklyConfirmedAckJob(job: Job) {
     .single();
   if (error) throw error;
   const first = p.full_name.split(" ")[0];
-  await sendTracked(
+  await sendColdTracked(
     job,
     p.phone,
+    "weekly_confirmed_ack",
+    [first],
     `✅ Confirmado, ${first}. Participarás en el sorteo de esta semana si hay alguien compatible disponible — te avisamos en cuanto se arme tu match.`,
   );
 }
 async function availabilityUpdateRequiredJob(job: Job) {
-  if (!socket) throw new Error("WHATSAPP_NOT_CONNECTED");
+  if (whatsappProvider !== "cloud" && !socket)
+    throw new Error("WHATSAPP_NOT_CONNECTED");
   const { data: profile, error } = await db
     .from("profiles")
     .select("id,full_name,phone")
@@ -872,7 +969,8 @@ async function adminNewRegistrationEmailJob(job: Job) {
 // próximo domingo", genérico para cualquier semana.
 const LAUNCH_WEEK_CODE = "2026-W46";
 async function registrationWelcomeJob(job: Job) {
-  if (!socket) throw new Error("WHATSAPP_NOT_CONNECTED");
+  if (whatsappProvider !== "cloud" && !socket)
+    throw new Error("WHATSAPP_NOT_CONNECTED");
   const { data: p, error } = await db
     .from("profiles")
     .select("id,full_name,phone")
@@ -895,9 +993,15 @@ async function registrationWelcomeJob(job: Job) {
     weekCode && weekCode <= LAUNCH_WEEK_CODE
       ? "📲 ¿Qué sigue? Por ahora no tienes que hacer nada. El domingo 8 de noviembre a las 7:00 p. m. te escribiremos por aquí para preguntarte si quieres participar en el sorteo de citas de la semana. Ahí sí te pediremos responder."
       : "📲 ¿Qué sigue? Por ahora no tienes que hacer nada. El próximo domingo a las 7:00 p. m. te escribiremos por aquí para preguntarte si quieres participar en el sorteo de citas de la semana. Ahí sí te pediremos responder. Y así cada domingo: tú decides cada semana si participas.";
-  await sendTracked(
+  // La plantilla de Meta usa siempre el cierre genérico ("el próximo
+  // domingo") — la versión con la fecha fija del lanzamiento es texto
+  // temporal de promoción, no vale la pena registrarla aparte como
+  // plantilla propia.
+  await sendColdTracked(
     job,
     p.phone,
+    "registration_welcome",
+    [first, summary, publicAppUrl],
     `👋 ¡Bienvenido a CoffeeMeet, ${first}! Ya haces parte de la iniciativa del MIT Harvard Club Colombia.\n\n` +
       `☕ Cada semana juntamos a dos alumni de MIT y Harvard para un café de 30 minutos, virtual o presencial.\n\n` +
       `🗓️ Tu disponibilidad registrada: ${summary}. Puedes cambiarla cuando quieras entrando a ${publicAppUrl}.\n\n` +
@@ -1019,7 +1123,9 @@ async function handleConnectionCommand() {
     .maybeSingle();
   if (error) throw error;
   const command = data?.requested_command as "reconnect" | "logout" | null;
-  if (!command) return;
+  // En modo cloud no hay QR ni sesión que reconectar/cerrar — ese botón del
+  // admin es puramente de Baileys.
+  if (!command || whatsappProvider === "cloud") return;
   const { error: clearError } = await db
     .from("whatsapp_worker_state")
     .update({ requested_command: null, requested_at: null })
@@ -1258,8 +1364,12 @@ async function main() {
       `No se pudo iniciar el worker contra Supabase: ${error.message}. Verifica las variables y las migraciones del worker.`,
     );
   }
-  log.info("Supabase ready; starting Baileys and outbox polling");
-  await connect();
+  if (whatsappProvider === "cloud") {
+    log.info("Supabase ready; using WhatsApp Cloud API, starting outbox polling");
+  } else {
+    log.info("Supabase ready; starting Baileys and outbox polling");
+    await connect();
+  }
   await poll();
 }
 
