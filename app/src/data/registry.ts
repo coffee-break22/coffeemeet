@@ -1,0 +1,5 @@
+﻿import type { RegistryEntry } from '../domain/coffeemeet'
+const STORAGE_KEY='coffeemeet.alumni-registry.v2'; const now=new Date().toISOString()
+const seed:RegistryEntry[]=[{id:crypto.randomUUID(),fullName:'Mariana Restrepo',email:'mariana@alumni.harvard.edu',phone:'+57 300 555 0182',school:'harvard',graduationYear:2016,active:true,notes:'Validada por directorio del club',source:'manual',updatedAt:now},{id:crypto.randomUUID(),fullName:'Santiago Vélez',email:'svelez@alum.mit.edu',phone:'+57 310 555 0144',school:'mit',graduationYear:2019,active:true,notes:'',source:'manual',updatedAt:now},{id:crypto.randomUUID(),fullName:'Laura Gómez',email:'laura.gomez@example.com',phone:'+57 315 555 0168',school:'harvard_mit',graduationYear:2022,active:true,notes:'Pendiente confirmar datos',source:'manual',updatedAt:now}]
+export function loadRegistry():RegistryEntry[]{const stored=localStorage.getItem(STORAGE_KEY);if(!stored)return seed;try{return JSON.parse(stored)as RegistryEntry[]}catch{return seed}}
+export const saveRegistry=(entries:RegistryEntry[])=>localStorage.setItem(STORAGE_KEY,JSON.stringify(entries))
