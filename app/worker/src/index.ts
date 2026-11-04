@@ -21,6 +21,33 @@ import {
   log,
   publicAppUrl,
 } from "./whatsappCommands.js";
+import {
+  parseCloudWebhookMessages,
+  sendCloudTemplate,
+  sendCloudText,
+  verifyWebhookChallenge,
+} from "./whatsappCloud.js";
+// Mientras no se active "cloud" (ver guía de migración), todo sigue
+// funcionando exactamente igual que hoy, con Baileys. El día que Meta
+// apruebe la cuenta, se cambia WHATSAPP_PROVIDER=cloud en el .env del
+// worker y se reinicia — no hace falta ningún otro cambio de código.
+const whatsappProvider =
+  process.env.WHATSAPP_PROVIDER === "cloud" ? "cloud" : "baileys";
+// Plantillas aprobadas por Meta para los mensajes que CoffeeMeet inicia sin
+// que el usuario haya escrito primero (fuera de la ventana de 24h) — cada
+// nombre debe coincidir exactamente con el que quede registrado en
+// WhatsApp Manager. Se actualiza esta lista en cuanto estén aprobadas; con
+// WHATSAPP_PROVIDER=baileys esta tabla no se usa para nada.
+const CLOUD_TEMPLATES: Record<string, string> = {
+  weekly_confirmation_sunday: "coffeemeet_confirmacion_domingo",
+  weekly_confirmation_monday: "coffeemeet_ultimo_aviso",
+  match_whatsapp: "coffeemeet_match_asignado",
+  meeting_reminder: "coffeemeet_recordatorio_cita",
+  weekly_outcome_no_match: "coffeemeet_sin_match",
+  weekly_outcome_holiday: "coffeemeet_festivo",
+  weekly_reactivation: "coffeemeet_reactivacion",
+  registration_welcome: "coffeemeet_bienvenida",
+};
 const required = (name: string) => {
   const value = process.env[name];
   if (!value) throw new Error(`Missing ${name}`);
@@ -353,13 +380,59 @@ let lastHeartbeatAt = 0;
 let consecutive403Count = 0;
 const MAX_CONSECUTIVE_403 = 3;
 const healthServer=createServer((request,response)=>{
-  if(request.url!=="/"&&request.url!=="/health"){
+  const url = new URL(request.url ?? "/", "http://localhost");
+  // Meta llama esta ruta GET una sola vez, al configurar la URL del
+  // webhook en el panel de desarrolladores, para confirmar que el servidor
+  // es tuyo — hay que devolver exactamente hub.challenge si el token
+  // coincide con WHATSAPP_WEBHOOK_VERIFY_TOKEN.
+  if (url.pathname === "/webhook" && request.method === "GET") {
+    const challenge = verifyWebhookChallenge(
+      url.searchParams.get("hub.mode"),
+      url.searchParams.get("hub.verify_token"),
+      url.searchParams.get("hub.challenge"),
+    );
+    if (challenge !== null) {
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end(challenge);
+    } else {
+      response.writeHead(403);
+      response.end();
+    }
+    return;
+  }
+  // Meta manda cada mensaje/respuesta entrante por aquí (POST), en vez del
+  // socket persistente que usa Baileys. Se reutiliza incoming() sin
+  // cambios — la lógica de qué responder a "1"/"2"/"3", la encuesta, etc.
+  // es la misma sin importar el transporte.
+  if (url.pathname === "/webhook" && request.method === "POST") {
+    let raw = "";
+    request.on("data", (chunk) => (raw += chunk));
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true }));
+      if (whatsappProvider !== "cloud") return;
+      try {
+        const body: unknown = JSON.parse(raw);
+        for (const msg of parseCloudWebhookMessages(body)) {
+          void incoming(`${msg.from}@s.whatsapp.net`, msg.text, async (targetJid, text) => {
+            await sendCloudText(targetJid.split("@")[0], text);
+          }).catch((error) =>
+            log.error({ err: error }, "cloud webhook incoming failed"),
+          );
+        }
+      } catch (error) {
+        log.error({ err: error }, "could not parse WhatsApp Cloud webhook body");
+      }
+    });
+    return;
+  }
+  if(url.pathname!=="/"&&url.pathname!=="/health"){
     response.writeHead(404,{"content-type":"application/json"});
     response.end(JSON.stringify({ok:false}));
     return;
   }
   response.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});
-  response.end(JSON.stringify({ok:true,service:"coffeemeet-worker",whatsapp:socket?"connected":"disconnected"}));
+  response.end(JSON.stringify({ok:true,service:"coffeemeet-worker",whatsapp:whatsappProvider==="cloud"?"cloud":(socket?"connected":"disconnected")}));
 });
 async function sendTracked(
   job: Job,
@@ -368,6 +441,23 @@ async function sendTracked(
   quickReplies = false,
 ) {
   if (job.external_id || job.sent_at) return;
+  if (whatsappProvider === "cloud") {
+    // TODO: una vez estén aprobadas las plantillas de CLOUD_TEMPLATES, los
+    // jobs que inician conversación (ver esa tabla) deben mandar la
+    // plantilla con sendCloudTemplate() en vez de texto libre — Meta
+    // rechaza texto libre fuera de la ventana de 24h. Por ahora, todo pasa
+    // como texto libre; sirve para los jobs "calientes" (respuestas
+    // directas dentro de las 24h) y para probar la conexión en cuanto haya
+    // credenciales, pero los jobs fríos van a fallar hasta cablear eso.
+    const externalId = await sendCloudText(phone, text);
+    const { error } = await db.rpc("record_outbox_delivery", {
+      p_id: job.id,
+      p_external_id: externalId,
+      p_text: text,
+    });
+    if (error) throw error;
+    return;
+  }
   if (!socket) throw new Error("WHATSAPP_NOT_CONNECTED");
   await waDelay();
   const content = quickReplies
