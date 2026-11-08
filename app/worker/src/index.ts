@@ -411,6 +411,21 @@ let lastHeartbeatAt = 0;
 // solo y se espera un reconectar manual desde Admin > Notificaciones.
 let consecutive403Count = 0;
 const MAX_CONSECUTIVE_403 = 3;
+// Bug real (2026-11-08): el freno de arriba solo actúa sobre 403. Cualquier
+// otra desconexión (p. ej. el celular físico apagado) seguía reintentando
+// cada 3s sin parar — si el teléfono queda apagado varias horas, son miles
+// de intentos seguidos, el mismo patrón que hace ver una cuenta como un bot
+// ante Meta aunque nunca llegue a dar 403. Ahora cualquier desconexión usa
+// backoff exponencial (3s, 6s, 12s... hasta un techo), no solo la de 403.
+let consecutiveDisconnectCount = 0;
+const BASE_RECONNECT_DELAY_MS = 3000;
+const MAX_RECONNECT_DELAY_MS = 10 * 60 * 1000;
+function nextReconnectDelayMs(attempt: number) {
+  return Math.min(
+    BASE_RECONNECT_DELAY_MS * 2 ** Math.max(attempt - 1, 0),
+    MAX_RECONNECT_DELAY_MS,
+  );
+}
 const healthServer=createServer((request,response)=>{
   const url = new URL(request.url ?? "/", "http://localhost");
   // Meta llama esta ruta GET una sola vez, al configurar la URL del
@@ -1134,6 +1149,7 @@ async function handleConnectionCommand() {
   if (clearError) throw clearError;
   suppressAutoReconnect = true;
   consecutive403Count = 0;
+  consecutiveDisconnectCount = 0;
   const current = activeSocket;
   socket = undefined;
   activeSocket = undefined;
@@ -1249,6 +1265,7 @@ async function connect() {
       }
       if (connection === "open") {
         consecutive403Count = 0;
+        consecutiveDisconnectCount = 0;
         socket = sock;
         void updateConnectionState({
           status: "connected",
@@ -1265,7 +1282,9 @@ async function connect() {
         const status = (lastDisconnect?.error as Boom)?.output?.statusCode;
         const loggedOut = status === DisconnectReason.loggedOut;
         consecutive403Count = status === 403 ? consecutive403Count + 1 : 0;
+        consecutiveDisconnectCount = loggedOut ? 0 : consecutiveDisconnectCount + 1;
         const blocked = consecutive403Count >= MAX_CONSECUTIVE_403;
+        const retryInMs = nextReconnectDelayMs(consecutiveDisconnectCount);
         void updateConnectionState({
           status: loggedOut ? "logged_out" : blocked ? "error" : "offline",
           qr_data_url: null,
@@ -1278,7 +1297,7 @@ async function connect() {
                 : null,
         });
         if (!loggedOut && !blocked && !suppressAutoReconnect)
-          setTimeout(() => void connect(), 3000);
+          setTimeout(() => void connect(), retryInMs);
         else if (loggedOut) log.error("WhatsApp logged out");
         else if (blocked)
           log.error(
@@ -1286,7 +1305,10 @@ async function connect() {
             "WhatsApp returned 403 repeatedly; stopping automatic reconnect",
           );
         if (!loggedOut && !blocked)
-          log.warn({ status, retryInMs: 3000 }, "WhatsApp disconnected; reconnecting");
+          log.warn(
+            { status, retryInMs, consecutiveDisconnectCount },
+            "WhatsApp disconnected; reconnecting",
+          );
       }
     });
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
