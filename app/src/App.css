@@ -3727,6 +3727,54 @@ dd {
 .test-mode-banner svg {
   flex-shrink: 0;
 }
+.pending-week-alert {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 0 0 1rem;
+  padding: 0.95rem 1.1rem;
+  border: 1px solid #d8a24c;
+  border-left: 4px solid #d8a24c;
+  border-radius: 12px;
+  background: #fff7e8;
+  color: #5e4025;
+}
+.pending-week-alert > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: #a9771f;
+}
+.pending-week-alert strong {
+  display: block;
+  font-size: 0.95rem;
+}
+.pending-week-alert p {
+  margin: 0.3rem 0 0.7rem;
+  font-size: 0.85rem;
+  color: #7a5a1e;
+}
+.pending-week-alert ul {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pending-week-alert li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #ecd4a4;
+  font-size: 0.85rem;
+}
+.pending-week-alert li button {
+  flex-shrink: 0;
+}
 .eligibility-note {
   margin: 0 0 1rem;
   padding: 0.9rem 1rem;

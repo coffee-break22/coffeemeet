@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  CalendarCheck,
   CheckCircle2,
   FlaskConical,
   RefreshCw,
@@ -20,6 +21,7 @@ import {
   cleanupRemoteTestData,
   confirmRemoteMatchBatch,
   loadAdminMatchingData,
+  loadUnmatchedPreviousWeeks,
   saveRemoteMatchDraft,
 } from "../../data/adminMatchingRepository.ts";
 import { useAuth } from "../auth/useAuth.ts";
@@ -201,6 +203,9 @@ export function MatchingPanel() {
   const [testMode, setTestMode] = useState(false);
   const [cleaningTests, setCleaningTests] = useState(false);
   const [matchingRefresh, setMatchingRefresh] = useState(0);
+  const [pendingWeeks, setPendingWeeks] = useState<
+    Array<{ weekCode: string; confirmedCount: number }>
+  >([]);
   const weekCode = weekOverride ?? config.weekCode;
   const matchingOpensAt = weeklyMatchingOpensAt(weekCode);
   const effectiveNow = simulatedNow ?? currentTime;
@@ -267,6 +272,18 @@ export function MatchingPanel() {
       active = false;
     };
   }, [auth.configured, auth.isAdmin, toast, weekCode, matchingRefresh]);
+  useEffect(() => {
+    if (!auth.configured || !auth.isAdmin) return;
+    let active = true;
+    void loadUnmatchedPreviousWeeks(config.weekCode)
+      .then((weeks) => {
+        if (active) setPendingWeeks(weeks);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [auth.configured, auth.isAdmin, config.weekCode, matchingRefresh]);
   async function cleanupTests(){
     setCleaningTests(true);
     try{
@@ -378,6 +395,43 @@ export function MatchingPanel() {
           </button>
         </div>
       </div>
+      {pendingWeeks.filter((week) => week.weekCode !== weekCode).length >
+        0 && (
+        <div className="pending-week-alert">
+          <CalendarCheck size={18} />
+          <div>
+            <strong>
+              {pendingWeeks.filter((week) => week.weekCode !== weekCode)
+                .length === 1
+                ? "Hay una semana anterior con confirmados sin pareja"
+                : "Hay semanas anteriores con confirmados sin pareja"}
+            </strong>
+            <p>
+              El corte del lunes avanzó la semana actual antes de que se
+              corriera el matching. Nadie se pierde la cita: solo falta
+              generar su borrador.
+            </p>
+            <ul>
+              {pendingWeeks
+                .filter((week) => week.weekCode !== weekCode)
+                .map((week) => (
+                  <li key={week.weekCode}>
+                    <span>
+                      {weekRangeLabel(week.weekCode)} · {week.confirmedCount}{" "}
+                      confirmado{week.confirmedCount === 1 ? "" : "s"}
+                    </span>
+                    <button
+                      className="secondary"
+                      onClick={() => setWeekOverride(week.weekCode)}
+                    >
+                      Ir a esa semana
+                    </button>
+                  </li>
+                ))}
+            </ul>
+          </div>
+        </div>
+      )}
       {!matchingIsOpen && (
         <label className="test-mode-toggle">
           <input

@@ -185,3 +185,19 @@ export async function cleanupRemoteTestData():Promise<{status:'waiting_calendar'
   if(error)throw error;
   return data as {status:'waiting_calendar'|'completed';pendingCalendar:number;deletedBatches:number};
 }
+export async function loadUnmatchedPreviousWeeks(
+  currentWeek: string,
+): Promise<Array<{ weekCode: string; confirmedCount: number }>> {
+  if (!supabase) return [];
+  const { data, error } = await supabase.rpc(
+    "get_admin_unmatched_previous_weeks",
+    { p_current_week: currentWeek },
+  );
+  if (error) throw error;
+  return ((data ?? []) as Array<{ weekCode: string; confirmedCount: number }>).map(
+    (row) => ({
+      weekCode: row.weekCode,
+      confirmedCount: Number(row.confirmedCount),
+    }),
+  );
+}
