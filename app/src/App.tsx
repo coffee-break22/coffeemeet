@@ -400,7 +400,7 @@ function App() {
           <Coffee size={16} />
           <span>
             ¡Arrancamos! La primera edición será la{" "}
-            <strong>semana del 09 de noviembre</strong>.
+            <strong>semana del 30 de noviembre</strong>.
           </span>
           <a className="promo-banner-cta" href="#inscripcion">
             Regístrate ya
